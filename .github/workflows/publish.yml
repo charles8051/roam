@@ -1,0 +1,112 @@
+name: Publish
+
+# Publishes Roam.Cli to nuget.org on a v* tag.
+#
+# Authentication is nuget.org Trusted Publishing: the job requests a short-lived
+# OIDC token from GitHub, nuget.org validates it against a policy registered for
+# this repository and this workflow file, and returns a temporary API key good
+# for one hour. No long-lived key is stored anywhere.
+#
+# The policy on nuget.org must name:
+#   Repository Owner  charles8051
+#   Repository        roam
+#   Workflow File     publish.yml          <- filename only, no path
+#   Environment       nuget.org
+#   Glob              Roam.*               <- scope it; a policy binds to the
+#                                             package OWNER, so an unscoped one
+#                                             could publish anything you own
+#
+# Renaming this file breaks publishing until the policy is updated to match.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Verify the OIDC exchange and packing without pushing to nuget.org'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  publish:
+    name: Pack and publish
+    runs-on: ubuntu-latest
+    environment: nuget.org
+    permissions:
+      contents: read
+      id-token: write   # required for nuget.org to issue the short-lived key
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # MinVer derives the version from the tag being built; a shallow
+          # checkout fetches none and would publish 0.0.0.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build Roam.slnx --configuration Release
+
+      # Never publish a tag that does not pass its own tests. ComposeLab needs a
+      # docker-compose lab over SSH and is not suitable for a hosted runner.
+      - name: Test
+        run: >
+          dotnet test Roam.slnx --configuration Release --no-build
+          --filter "Category!=ComposeLab"
+
+      # The test fixtures set IsPackable=false, so this emits exactly Roam.Cli.
+      # MinVer sets the version from the tag -- do not pass -p:PackageVersion,
+      # which MinVer overrides anyway.
+      - name: Pack
+        run: dotnet pack Roam.slnx --configuration Release --no-build --output artifacts
+
+      - name: List packages
+        run: ls -l artifacts
+
+      # Requested immediately before the push: the key expires after one hour.
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      # On a tag push `inputs.dry_run` is null, so this runs. Only a manual
+      # dispatch can skip it, and that is the default for a dispatch -- the
+      # first exercise of a new trusted-publishing policy should not have to be
+      # an irreversible publish.
+      - name: Push to nuget.org
+        if: ${{ !inputs.dry_run }}
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Dry run complete
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "Dry run: the OIDC exchange with nuget.org succeeded and the"
+          echo "package below was built. Nothing was pushed."
+          ls -1 artifacts
+
+      - name: Upload packages
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/*.nupkg
+          if-no-files-found: warn
+          retention-days: 14
