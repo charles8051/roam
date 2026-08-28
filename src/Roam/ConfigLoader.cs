@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using YamlDotNet.RepresentationModel;
 
@@ -5,6 +6,10 @@ namespace Roam;
 
 public static class ConfigLoader
 {
+    // The reserved name for "the machine roam is running on". Synthesized when the roamfile omits
+    // `hosts:` entirely, so a single-machine project needs no host block at all.
+    private const string LocalHostName = "local";
+
     public static Roamfile Load(string roamfilePath)
     {
         if (!File.Exists(roamfilePath))
@@ -31,31 +36,41 @@ public static class ConfigLoader
 
         RequireOnlyKeys(root, ["version", "project", "solution", "csproj", "hosts", "profiles"], "top-level");
 
-        var version = GetRequiredInt(root, "version");
+        var version = GetOptionalInt(root, "version") ?? 1;
         if (version != 1)
         {
             throw new RoamException(ExitCode.Config, "parse", "local", $"roamfile version '{version}' is not supported; v0 requires 1");
         }
 
+        var workspaceRoot = Path.GetDirectoryName(Path.GetFullPath(roamfilePath))
+            ?? throw new RoamException(ExitCode.Config, "parse", "local", $"could not determine the directory containing '{roamfilePath}'");
+
         var solution = GetOptionalString(root, "solution");
         var csproj = GetOptionalString(root, "csproj");
 
-        if (string.IsNullOrWhiteSpace(solution) == string.IsNullOrWhiteSpace(csproj))
+        if (!string.IsNullOrWhiteSpace(solution) && !string.IsNullOrWhiteSpace(csproj))
         {
-            throw new RoamException(ExitCode.Config, "parse", "local", "roamfile.yaml must set exactly one of 'solution' or 'csproj'");
+            throw new RoamException(ExitCode.Config, "parse", "local", "roamfile.yaml must set at most one of 'solution' or 'csproj'");
         }
 
-        var hostsNode = GetRequiredMapping(root, "hosts");
+        // Neither set: discover the project the way `roam init` does, so a single-project repo
+        // needs no `csproj:` line. Ambiguity is an error that names the candidates.
+        if (string.IsNullOrWhiteSpace(solution) && string.IsNullOrWhiteSpace(csproj))
+        {
+            csproj = DiscoverCsproj(workspaceRoot);
+        }
+
+        var project = GetOptionalString(root, "project");
+        var projectName = ResolveProjectNameForDefaults(workspaceRoot, csproj, project);
+
+        var hostsNode = GetOptionalMapping(root, "hosts");
         var profilesNode = GetRequiredMapping(root, "profiles");
 
         var hosts = new Dictionary<string, HostSpec>(StringComparer.OrdinalIgnoreCase);
-        foreach (var child in hostsNode.Children)
+        foreach (var child in (hostsNode ?? EmptyMapping()).Children)
         {
             var name = RequireScalarKey(child.Key, "host name");
-            if (child.Value is not YamlMappingNode hostNode)
-            {
-                throw new RoamException(ExitCode.Config, "parse", "local", $"host '{name}' must be a mapping");
-            }
+            var hostNode = AsMapping(child.Value, $"host '{name}'");
 
             RequireOnlyKeys(hostNode, ["ssh", "user", "port", "identity-file", "workspace", "os"], $"hosts.{name}");
             var os = GetOptionalString(hostNode, "os");
@@ -73,31 +88,38 @@ public static class ConfigLoader
                 os);
         }
 
+        // No hosts at all: synthesize the reserved `local` host so a single-machine project can
+        // omit the whole block. Everything it carries is derivable from the controller.
         if (hosts.Count == 0)
         {
-            throw new RoamException(ExitCode.Config, "parse", "local", "roamfile.yaml must define at least one host");
+            hosts[LocalHostName] = new HostSpec("localhost", Environment.UserName, null, null, ToYamlPath(workspaceRoot), CurrentOs());
         }
 
         var profiles = new Dictionary<string, ProfileSpec>(StringComparer.OrdinalIgnoreCase);
         foreach (var child in profilesNode.Children)
         {
             var name = RequireScalarKey(child.Key, "profile name");
-            if (child.Value is not YamlMappingNode profileNode)
-            {
-                throw new RoamException(ExitCode.Config, "parse", "local", $"profile '{name}' must be a mapping");
-            }
+            var profileNode = AsMapping(child.Value, $"profile '{name}'");
 
             RequireOnlyKeys(profileNode, ["description", "source", "build", "target", "publish-profile", "publish", "launch-profile", "env", "deploy", "run", "debug"], $"profiles.{name}");
 
             var publishProfile = GetOptionalString(profileNode, "publish-profile");
             var publishNode = GetOptionalMapping(profileNode, "publish");
-            if (string.IsNullOrWhiteSpace(publishProfile) == (publishNode is null))
+            if (!string.IsNullOrWhiteSpace(publishProfile) && publishNode is not null)
             {
-                throw new RoamException(ExitCode.Config, "parse", "local", $"profile '{name}' must set exactly one of 'publish-profile' or 'publish'");
+                throw new RoamException(ExitCode.Config, "parse", "local", $"profile '{name}' sets both 'publish-profile' and 'publish'; set at most one");
             }
 
+            // The three host roles. `source` is the machine roam runs on; when the roamfile
+            // defines exactly one host it can only be that one. `build` and `target` follow
+            // `source` unless they say otherwise.
+            var source = GetOptionalString(profileNode, "source") ?? DefaultSourceHost(name, hosts);
+            var build = GetOptionalString(profileNode, "build") ?? source;
+            var target = GetOptionalString(profileNode, "target") ?? source;
+            var targetIsLocal = string.Equals(target, source, StringComparison.OrdinalIgnoreCase);
+
             var env = GetOptionalStringMap(profileNode, "env");
-            var deployNode = GetRequiredMapping(profileNode, "deploy");
+            var deployNode = GetOptionalMapping(profileNode, "deploy") ?? EmptyMapping();
             RequireOnlyKeys(deployNode, ["path", "flatten-publish", "stop", "start", "ready", "ready-timeout", "ready-interval-ms", "interactive-session", "interactive-session-trigger", "run-level", "detach", "transfer", "uninstall", "diag", "provenance"], $"profiles.{name}.deploy");
 
             var runNode = GetOptionalMapping(profileNode, "run");
@@ -119,14 +141,24 @@ public static class ConfigLoader
                 GetOptionalString(debugNode, "process-name"),
                 GetOptionalBool(debugNode, "install-on-target") ?? false);
 
+            // `publish:` is the default shape. An explicit `publish-profile:` still wins outright;
+            // otherwise a missing block (or a block without `rid`) is filled from the target host's
+            // declared OS and the controller's architecture.
             PublishSpec? publish = null;
-            if (publishNode is not null)
+            if (string.IsNullOrWhiteSpace(publishProfile))
             {
-                RequireOnlyKeys(publishNode, ["rid", "self-contained", "configuration", "framework"], $"profiles.{name}.publish");
+                if (publishNode is not null)
+                {
+                    RequireOnlyKeys(publishNode, ["rid", "self-contained", "configuration", "framework"], $"profiles.{name}.publish");
+                }
+
+                var targetOs = hosts.TryGetValue(target, out var targetSpec) ? targetSpec.Os : null;
                 publish = new PublishSpec(
-                    GetRequiredString(publishNode, "rid"),
+                    GetOptionalString(publishNode, "rid") ?? DefaultRid(name, targetOs),
                     GetOptionalBool(publishNode, "self-contained") ?? true,
-                    GetOptionalString(publishNode, "configuration"),
+                    // Only the fully synthesized block picks a configuration. An explicit `publish:`
+                    // that omits it keeps dotnet's own default, so no existing profile changes shape.
+                    GetOptionalString(publishNode, "configuration") ?? (publishNode is null ? "Release" : null),
                     GetOptionalString(publishNode, "framework"));
             }
 
@@ -146,7 +178,7 @@ public static class ConfigLoader
             }
 
             var deploy = new DeploySpec(
-                GetRequiredString(deployNode, "path"),
+                GetOptionalString(deployNode, "path") ?? DefaultDeployPath(workspaceRoot, projectName, targetIsLocal),
                 GetOptionalBool(deployNode, "flatten-publish") ?? false,
                 GetOptionalString(deployNode, "stop"),
                 GetOptionalString(deployNode, "start"),
@@ -165,12 +197,12 @@ public static class ConfigLoader
 
             profiles[name] = new ProfileSpec(
                 GetOptionalString(profileNode, "description"),
-                GetRequiredString(profileNode, "source"),
-                GetRequiredString(profileNode, "build"),
-                GetRequiredString(profileNode, "target"),
+                source,
+                build,
+                target,
                 publishProfile,
                 publish,
-                GetRequiredString(profileNode, "launch-profile"),
+                GetOptionalString(profileNode, "launch-profile"),
                 env,
                 deploy,
                 run,
@@ -182,7 +214,8 @@ public static class ConfigLoader
             throw new RoamException(ExitCode.Config, "parse", "local", "roamfile.yaml must define at least one profile");
         }
 
-        return new Roamfile(version, GetOptionalString(root, "project"), solution, csproj, hosts, profiles);
+        ApplyWorkspaceDefaults(hosts, profiles, workspaceRoot, projectName);
+        return new Roamfile(version, project, solution, csproj, hosts, profiles);
     }
 
     public static string Discover(string? explicitPath, string workingDirectory)
@@ -206,6 +239,147 @@ public static class ConfigLoader
 
         throw new RoamException(ExitCode.Config, "parse", "local", "could not find roamfile.yaml by walking up from the current directory");
     }
+
+    // ---- Defaults ------------------------------------------------------------------------
+    // Every helper below only fires when the corresponding key is absent, so an existing
+    // roamfile parses to the same records it did before. See docs/configuration.md ("Defaults").
+
+    // The single csproj under the roamfile directory, as a workspace-relative path. Mirrors the
+    // discovery `roam init` performs, and the bin/obj filtering ProjectMetadataResolver uses when
+    // it walks a solution.
+    private static string DiscoverCsproj(string workspaceRoot)
+    {
+        var separator = Path.DirectorySeparatorChar;
+        var candidates = Directory
+            .GetFiles(workspaceRoot, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{separator}bin{separator}", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{separator}obj{separator}", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            throw new RoamException(ExitCode.Config, "parse", "local", $"roamfile.yaml sets neither 'csproj' nor 'solution', and no .csproj was found under '{workspaceRoot}'");
+        }
+
+        if (candidates.Count > 1)
+        {
+            var listed = candidates.Take(5).Select(path => ToYamlPath(Path.GetRelativePath(workspaceRoot, path)));
+            var suffix = candidates.Count > 5 ? $", and {candidates.Count - 5} more" : string.Empty;
+            throw new RoamException(ExitCode.Config, "parse", "local", $"roamfile.yaml sets neither 'csproj' nor 'solution', and '{workspaceRoot}' contains {candidates.Count} csproj files ({string.Join(", ", listed)}{suffix}); set 'csproj' explicitly");
+        }
+
+        return ToYamlPath(Path.GetRelativePath(workspaceRoot, candidates[0]));
+    }
+
+    // Best-effort project name for path defaults only. Follows the same precedence
+    // ProjectMetadataResolver.ResolveProjectPaths uses, and degrades to the workspace directory
+    // name rather than throwing — the authoritative resolution still happens there.
+    private static string ResolveProjectNameForDefaults(string workspaceRoot, string? csproj, string? project)
+    {
+        if (!string.IsNullOrWhiteSpace(project))
+        {
+            return project!;
+        }
+
+        if (!string.IsNullOrWhiteSpace(csproj))
+        {
+            return Path.GetFileNameWithoutExtension(csproj!);
+        }
+
+        return new DirectoryInfo(workspaceRoot).Name;
+    }
+
+    // `source` names the machine roam runs on. With exactly one host defined there is only one
+    // answer; otherwise the profile has to say which.
+    private static string DefaultSourceHost(string profileName, IReadOnlyDictionary<string, HostSpec> hosts)
+    {
+        if (hosts.Count == 1)
+        {
+            return hosts.Keys.First();
+        }
+
+        if (hosts.ContainsKey(LocalHostName))
+        {
+            return LocalHostName;
+        }
+
+        var known = string.Join(", ", hosts.Keys.OrderBy(x => x, StringComparer.Ordinal));
+        throw new RoamException(ExitCode.Config, "parse", "local", $"profile '{profileName}' does not set 'source' and roamfile.yaml defines {hosts.Count} hosts ({known}); set 'source' explicitly or name one host '{LocalHostName}'");
+    }
+
+    // A roam-owned deploy directory. Local targets land beside the workspace (what `roam init`
+    // scaffolds); remote targets land under the deploying user's home, which SyncEngine expands.
+    private static string DefaultDeployPath(string workspaceRoot, string projectName, bool targetIsLocal)
+        => targetIsLocal
+            ? $"{ToYamlPath(workspaceRoot).TrimEnd('/')}/.roam-dev"
+            : $"~/.roam/apps/{projectName}";
+
+    // A build host needs a workspace to sync source into; SyncSourceAsync dereferences it
+    // unconditionally. The source host is the controller, so its workspace is the workspace root;
+    // every other host gets a roam-owned directory under the remote user's home.
+    private static void ApplyWorkspaceDefaults(
+        IDictionary<string, HostSpec> hosts,
+        IReadOnlyDictionary<string, ProfileSpec> profiles,
+        string workspaceRoot,
+        string projectName)
+    {
+        var sourceHosts = new HashSet<string>(profiles.Values.Select(profile => profile.Source), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var name in hosts.Keys.ToList())
+        {
+            if (!string.IsNullOrWhiteSpace(hosts[name].Workspace))
+            {
+                continue;
+            }
+
+            hosts[name] = hosts[name] with
+            {
+                Workspace = sourceHosts.Contains(name)
+                    ? ToYamlPath(workspaceRoot)
+                    : $"~/.roam/src/{projectName}",
+            };
+        }
+    }
+
+    // Publish for the target host's declared OS on the controller's architecture. When the target
+    // does not declare an OS, assume it matches the controller — the same assumption `roam init`
+    // makes when it scaffolds a single-machine profile.
+    private static string DefaultRid(string profileName, string? targetOs)
+    {
+        var os = targetOs switch
+        {
+            "windows" => "win",
+            "macos" => "osx",
+            "linux" => "linux",
+            _ => CurrentOs() switch { "windows" => "win", "macos" => "osx", _ => "linux" },
+        };
+
+        var architecture = RuntimeInformation.OSArchitecture switch
+        {
+            Architecture.X64 => "x64",
+            Architecture.Arm64 => "arm64",
+            _ => throw new RoamException(ExitCode.Config, "parse", "local", $"profile '{profileName}' omits 'publish.rid' and roam cannot infer one for architecture '{RuntimeInformation.OSArchitecture}'; set 'publish.rid' explicitly"),
+        };
+
+        return $"{os}-{architecture}";
+    }
+
+    private static string CurrentOs()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return "windows";
+        }
+
+        return OperatingSystem.IsMacOS() ? "macos" : "linux";
+    }
+
+    // Roamfile paths are forward-slashed everywhere, including on a Windows controller, because
+    // they are consumed by both the local filesystem and remote shells.
+    private static string ToYamlPath(string path) => path.Replace('\\', '/');
+
+    // ---- Parsing -------------------------------------------------------------------------
 
     private static SyncTransferMode ParseTransferMode(string profileName, string? value)
     {
@@ -362,16 +536,27 @@ public static class ConfigLoader
             return null;
         }
 
-        if (value is not YamlMappingNode mapping)
-        {
-            throw new RoamException(ExitCode.Config, "parse", "local", $"'{key}' must be a mapping");
-        }
-
-        return mapping;
+        return AsMapping(value, $"'{key}'");
     }
 
-    private static string GetRequiredString(YamlMappingNode node, string key)
-        => GetOptionalString(node, key) ?? throw new RoamException(ExitCode.Config, "parse", "local", $"missing required value '{key}'");
+    // A key written with no body (`deploy:`, `local:`) parses as an empty scalar. Treat it as an
+    // empty mapping so every block whose fields all have defaults can be left blank.
+    private static YamlMappingNode AsMapping(YamlNode node, string description)
+    {
+        if (node is YamlMappingNode mapping)
+        {
+            return mapping;
+        }
+
+        if (node is YamlScalarNode scalar && string.IsNullOrWhiteSpace(scalar.Value))
+        {
+            return EmptyMapping();
+        }
+
+        throw new RoamException(ExitCode.Config, "parse", "local", $"{description} must be a mapping");
+    }
+
+    private static YamlMappingNode EmptyMapping() => new();
 
     private static string? GetOptionalString(YamlMappingNode? node, string key)
     {
@@ -387,9 +572,6 @@ public static class ConfigLoader
 
         return scalar.Value;
     }
-
-    private static int GetRequiredInt(YamlMappingNode node, string key)
-        => GetOptionalInt(node, key) ?? throw new RoamException(ExitCode.Config, "parse", "local", $"missing required integer '{key}'");
 
     private static int? GetOptionalInt(YamlMappingNode? node, string key)
     {

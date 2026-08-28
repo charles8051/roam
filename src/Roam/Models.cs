@@ -52,7 +52,10 @@ public sealed record ProfileSpec(
     string Target,
     string? PublishProfile,
     PublishSpec? Publish,
-    string LaunchProfile,
+    // Null when the roamfile omits `launch-profile:`. ProjectMetadataResolver.LoadLaunchProfile
+    // then falls back to the first profile in launchSettings.json, or to no launch profile at all
+    // when the project has no launchSettings.json. See docs/configuration.md ("Defaults").
+    string? LaunchProfile,
     IReadOnlyDictionary<string, string> Env,
     DeploySpec Deploy,
     RunSpec Run,

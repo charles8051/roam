@@ -45,15 +45,38 @@ public sealed class ConfigLoaderTests
         Assert.True(roamfile.Profiles["demo"].Publish!.SelfContained);
     }
 
+    // A profile that names neither publish shape used to be a config error. It now gets a
+    // synthesized publish block; the RID follows the target host's declared OS.
     [Fact]
-    public void RejectsProfilesWithoutPublishConfiguration()
+    public void DefaultsPublishBlockWhenProfileNamesNeitherShape()
     {
         var temp = CreateTempDirectory();
         var path = Path.Combine(temp, "roamfile.yaml");
         File.WriteAllText(path, "version: 1\ncsproj: app.csproj\nhosts:\n  local:\n    ssh: localhost\n    user: test\n    os: linux\nprofiles:\n  demo:\n    source: local\n    build: local\n    target: local\n    launch-profile: Demo\n    deploy:\n      path: /tmp/demo\n");
 
-        var ex = Assert.Throws<RoamException>(() => ConfigLoader.Load(path));
-        Assert.Contains("exactly one of 'publish-profile' or 'publish'", ex.Message);
+        var profile = ConfigLoader.Load(path).Profiles["demo"];
+
+        Assert.Null(profile.PublishProfile);
+        Assert.NotNull(profile.Publish);
+        Assert.StartsWith("linux-", profile.Publish!.Rid);
+        Assert.True(profile.Publish.SelfContained);
+        Assert.Equal("Release", profile.Publish.Configuration);
+    }
+
+    // An explicit publish block that omits only the RID keeps every other field it declared —
+    // notably configuration, which stays null so dotnet picks its own default.
+    [Fact]
+    public void DefaultsOnlyTheRidInsideAnExplicitPublishBlock()
+    {
+        var temp = CreateTempDirectory();
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "version: 1\ncsproj: app.csproj\nhosts:\n  local:\n    ssh: localhost\n    user: test\n    os: windows\nprofiles:\n  demo:\n    source: local\n    build: local\n    target: local\n    launch-profile: Demo\n    publish:\n      self-contained: false\n    deploy:\n      path: /tmp/demo\n");
+
+        var profile = ConfigLoader.Load(path).Profiles["demo"];
+
+        Assert.StartsWith("win-", profile.Publish!.Rid);
+        Assert.False(profile.Publish.SelfContained);
+        Assert.Null(profile.Publish.Configuration);
     }
 
     [Fact]
@@ -64,7 +87,7 @@ public sealed class ConfigLoaderTests
         File.WriteAllText(path, "version: 1\ncsproj: app.csproj\nhosts:\n  local:\n    ssh: localhost\n    user: test\n    os: linux\nprofiles:\n  demo:\n    source: local\n    build: local\n    target: local\n    publish-profile: Demo\n    launch-profile: Demo\n    publish:\n      rid: linux-x64\n      self-contained: true\n    deploy:\n      path: /tmp/demo\n");
 
         var ex = Assert.Throws<RoamException>(() => ConfigLoader.Load(path));
-        Assert.Contains("exactly one of 'publish-profile' or 'publish'", ex.Message);
+        Assert.Contains("set at most one", ex.Message);
     }
 
     [Fact]
@@ -284,6 +307,151 @@ public sealed class ConfigLoaderTests
         var second = await File.ReadAllBytesAsync(output);
 
         Assert.Equal(Convert.ToHexString(SHA256.HashData(first)), Convert.ToHexString(SHA256.HashData(second)));
+    }
+
+    // The floor: a roamfile that names one profile and nothing else. Everything the pipeline needs
+    // is derived — version, the csproj, the local host, the three roles, publish, deploy.path.
+    [Fact]
+    public void LoadsMinimalRoamfile()
+    {
+        var temp = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp, "src", "MyApp"));
+        File.WriteAllText(Path.Combine(temp, "src", "MyApp", "MyApp.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "profiles:\n  dev-local:\n    deploy:\n      start: ./MyApp\n");
+
+        var roamfile = ConfigLoader.Load(path);
+        var profile = roamfile.Profiles["dev-local"];
+
+        Assert.Equal(1, roamfile.Version);
+        Assert.Equal("src/MyApp/MyApp.csproj", roamfile.Csproj);
+        Assert.Equal("local", profile.Source);
+        Assert.Equal("local", profile.Build);
+        Assert.Equal("local", profile.Target);
+        Assert.Null(profile.LaunchProfile);
+        Assert.NotNull(profile.Publish);
+        Assert.EndsWith("/.roam-dev", profile.Deploy.Path);
+        Assert.Equal("./MyApp", profile.Run.Command);
+
+        var local = roamfile.Hosts["local"];
+        Assert.Equal("localhost", local.Ssh);
+        Assert.Equal(temp.Replace('\\', '/'), local.Workspace);
+    }
+
+    // A profile body with no keys at all still resolves. It deploys nothing, but it parses, which
+    // is what makes `deploy:` and the host roles genuinely optional rather than optional-on-paper.
+    [Fact]
+    public void LoadsProfileWithEmptyBody()
+    {
+        var temp = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(temp, "App.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "profiles:\n  dev-local:\n");
+
+        var profile = ConfigLoader.Load(path).Profiles["dev-local"];
+
+        Assert.Equal("local", profile.Target);
+        Assert.EndsWith("/.roam-dev", profile.Deploy.Path);
+    }
+
+    // An empty host body is legal: ssh: falls back to the host key and the rest to `ssh -G`.
+    [Fact]
+    public void LoadsHostWithEmptyBody()
+    {
+        var temp = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(temp, "App.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "hosts:\n  devbox:\nprofiles:\n  demo:\n    deploy:\n      start: ./App\n");
+
+        var roamfile = ConfigLoader.Load(path);
+
+        Assert.Null(roamfile.Hosts["devbox"].Ssh);
+        Assert.Equal("devbox", roamfile.Profiles["demo"].Source);
+    }
+
+    // build/target follow source; a remote target gets a roam-owned home-relative deploy path and
+    // a roam-owned workspace, while the source host's workspace is the roamfile's own directory.
+    [Fact]
+    public void DefaultsRolesAndPathsAcrossTwoHosts()
+    {
+        var temp = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(temp, "EdgeWorker.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "hosts:\n  laptop:\n    ssh: laptop\n    user: dev\n  edge:\n    ssh: edge\n    user: edge\n    os: linux\nprofiles:\n  demo:\n    source: laptop\n    target: edge\n    deploy:\n      start: ./EdgeWorker\n");
+
+        var roamfile = ConfigLoader.Load(path);
+        var profile = roamfile.Profiles["demo"];
+
+        Assert.Equal("laptop", profile.Build);
+        Assert.Equal("~/.roam/apps/EdgeWorker", profile.Deploy.Path);
+        Assert.Equal(temp.Replace('\\', '/'), roamfile.Hosts["laptop"].Workspace);
+        Assert.Equal("~/.roam/src/EdgeWorker", roamfile.Hosts["edge"].Workspace);
+    }
+
+    // With more than one host and no `source`, roam cannot know which machine it is running on.
+    [Fact]
+    public void RejectsOmittedSourceWhenSeveralHostsAreDefined()
+    {
+        var temp = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(temp, "App.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "hosts:\n  a:\n    ssh: a\n  b:\n    ssh: b\nprofiles:\n  demo:\n    deploy:\n      start: ./App\n");
+
+        var ex = Assert.Throws<RoamException>(() => ConfigLoader.Load(path));
+        Assert.Equal(ExitCode.Config, ex.ExitCode);
+        Assert.Contains("does not set 'source'", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsAmbiguousCsprojDiscovery()
+    {
+        var temp = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp, "one"));
+        Directory.CreateDirectory(Path.Combine(temp, "two"));
+        File.WriteAllText(Path.Combine(temp, "one", "One.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(temp, "two", "Two.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "profiles:\n  demo:\n    deploy:\n      start: ./App\n");
+
+        var ex = Assert.Throws<RoamException>(() => ConfigLoader.Load(path));
+        Assert.Equal(ExitCode.Config, ex.ExitCode);
+        Assert.Contains("one/One.csproj", ex.Message);
+        Assert.Contains("set 'csproj' explicitly", ex.Message);
+    }
+
+    // Discovery must ignore build output, or any repo that has been built once becomes ambiguous.
+    [Fact]
+    public void CsprojDiscoveryIgnoresBinAndObj()
+    {
+        var temp = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(temp, "src"));
+        Directory.CreateDirectory(Path.Combine(temp, "src", "obj", "Debug"));
+        File.WriteAllText(Path.Combine(temp, "src", "App.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(temp, "src", "obj", "Debug", "App.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "profiles:\n  demo:\n    deploy:\n      start: ./App\n");
+
+        Assert.Equal("src/App.csproj", ConfigLoader.Load(path).Csproj);
+    }
+
+    // The pre-defaults shape must keep parsing to exactly the records it did before.
+    [Fact]
+    public void ExplicitRoamfileIsUnaffectedByDefaults()
+    {
+        var temp = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(temp, "app.csproj"), "<Project />");
+        var path = Path.Combine(temp, "roamfile.yaml");
+        File.WriteAllText(path, "version: 1\ncsproj: app.csproj\nhosts:\n  local:\n    ssh: localhost\n    user: test\n    workspace: /work\n    os: linux\nprofiles:\n  demo:\n    source: local\n    build: local\n    target: local\n    publish:\n      rid: linux-arm64\n      self-contained: false\n      configuration: Debug\n    launch-profile: Demo\n    deploy:\n      path: /tmp/demo\n");
+
+        var roamfile = ConfigLoader.Load(path);
+        var profile = roamfile.Profiles["demo"];
+
+        Assert.Equal("/work", roamfile.Hosts["local"].Workspace);
+        Assert.Equal("linux-arm64", profile.Publish!.Rid);
+        Assert.False(profile.Publish.SelfContained);
+        Assert.Equal("Debug", profile.Publish.Configuration);
+        Assert.Equal("Demo", profile.LaunchProfile);
+        Assert.Equal("/tmp/demo", profile.Deploy.Path);
     }
 
     private static string CreateTempDirectory()

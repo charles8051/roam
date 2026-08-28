@@ -5,15 +5,16 @@
   "description": "Schema for roamfile.yaml, v0. See docs/configuration.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "hosts", "profiles"],
+  "required": ["profiles"],
   "properties": {
     "version": {
-      "description": "roamfile schema version. v0 requires 1.",
+      "description": "roamfile schema version. v0 requires 1. Default 1 when omitted.",
       "type": "integer",
-      "enum": [1]
+      "enum": [1],
+      "default": 1
     },
     "project": {
-      "description": "Human-readable project name. Informational only.",
+      "description": "Human-readable project name. Selects the csproj when 'solution' is set; otherwise informational.",
       "type": "string"
     },
     "solution": {
@@ -21,13 +22,12 @@
       "type": "string"
     },
     "csproj": {
-      "description": "Path to a single csproj, used when there is no solution.",
+      "description": "Path to a single csproj, used when there is no solution. When neither 'csproj' nor 'solution' is set, roam discovers the single .csproj under the roamfile directory (ignoring bin/ and obj/) and errors if there is more than one.",
       "type": "string"
     },
     "hosts": {
-      "description": "Named SSH hosts used by profiles.",
+      "description": "Named SSH hosts used by profiles. When omitted, roam synthesizes a single host named 'local' pointing at the machine roam is running on.",
       "type": "object",
-      "minProperties": 1,
       "additionalProperties": { "$ref": "#/$defs/host" }
     },
     "profiles": {
@@ -37,13 +37,11 @@
       "additionalProperties": { "$ref": "#/$defs/profile" }
     }
   },
-  "oneOf": [
-    { "required": ["solution"] },
-    { "required": ["csproj"] }
-  ],
+  "not": { "required": ["solution", "csproj"] },
   "$defs": {
     "host": {
-      "type": "object",
+      "description": "A host block may be empty: 'ssh' falls back to the host key, and user/port/identity-file to `ssh -G` resolution.",
+      "type": ["object", "null"],
       "additionalProperties": false,
       "properties": {
         "ssh": {
@@ -65,7 +63,7 @@
           "type": "string"
         },
         "workspace": {
-          "description": "Workspace root for source/build roles. Target hosts ignore this field.",
+          "description": "Workspace root for source/build roles. Target hosts ignore this field. Defaults to the roamfile's own directory for a host used as 'source', and to ~/.roam/src/<project> for any other host.",
           "type": "string"
         },
         "os": {
@@ -76,23 +74,22 @@
       }
     },
     "profile": {
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["source", "build", "target", "launch-profile", "deploy"],
       "properties": {
         "description": {
           "type": "string"
         },
         "source": {
-          "description": "Host key from hosts: that plays the source role.",
+          "description": "Host key from hosts: that plays the source role. Defaults to the only defined host, or to 'local' when a host by that name exists. Required when the roamfile defines several hosts and none is named 'local'.",
           "type": "string"
         },
         "build": {
-          "description": "Host key from hosts: that runs dotnet publish.",
+          "description": "Host key from hosts: that runs dotnet publish. Defaults to 'source'.",
           "type": "string"
         },
         "target": {
-          "description": "Host key from hosts: that runs the published binary.",
+          "description": "Host key from hosts: that runs the published binary. Defaults to 'source'.",
           "type": "string"
         },
         "publish-profile": {
@@ -103,7 +100,7 @@
           "$ref": "#/$defs/publish"
         },
         "launch-profile": {
-          "description": "Profile name from Properties/launchSettings.json.",
+          "description": "Profile name from Properties/launchSettings.json. When omitted, roam uses the first profile in that file, or runs with no launch profile when the project has no launchSettings.json.",
           "type": "string"
         },
         "env": {
@@ -115,18 +112,15 @@
         "run": { "$ref": "#/$defs/run" },
         "debug": { "$ref": "#/$defs/debug" }
       },
-      "oneOf": [
-        { "required": ["publish-profile"] },
-        { "required": ["publish"] }
-      ]
+      "not": { "required": ["publish-profile", "publish"] }
     },
     "publish": {
-      "type": "object",
+      "description": "The Roam-native publish contract. Synthesized when a profile sets neither 'publish' nor 'publish-profile'; the synthesized block also defaults configuration to Release.",
+      "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["rid"],
       "properties": {
         "rid": {
-          "description": "Runtime identifier passed to dotnet publish --runtime.",
+          "description": "Runtime identifier passed to dotnet publish --runtime. Defaults to the target host's declared os (or the controller's, when the target declares none) plus the controller's architecture.",
           "type": "string"
         },
         "self-contained": {
@@ -145,12 +139,11 @@
       }
     },
     "deploy": {
-      "type": "object",
+      "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["path"],
       "properties": {
         "path": {
-          "description": "Absolute deploy directory on the target host.",
+          "description": "Absolute deploy directory on the target host. Defaults to <workspace>/.roam-dev when the target is the source host, and to ~/.roam/apps/<project> otherwise.",
           "type": "string"
         },
         "flatten-publish": {

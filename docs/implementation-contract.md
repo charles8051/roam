@@ -95,13 +95,19 @@ fixture is
 [`../tests/fixtures/SampleApp/roamfile.yaml`](../tests/fixtures/SampleApp/roamfile.yaml).
 The parser is strict: unknown keys are `config` errors (exit `3`).
 
-The required v0 concepts are:
+Strictness applies to *unknown* keys, not *absent* ones. Most of the
+concepts below have defaults and can be omitted; the version integer
+does not change when a field becomes derivable, because every roamfile
+that parsed before parses to the same records. The authoritative list
+of defaults is [`configuration.md`](configuration.md#defaults).
+
+The v0 concepts are:
 
 - schema `version: 1`,
 - project root (`solution` or `csproj`),
 - named hosts with SSH connection info and optional `workspace`, `os`,
 - named profiles with `source`, `build`, `target`,
-- `publish-profile`,
+- `publish-profile` or a `publish` block,
 - `launch-profile`,
 - optional profile-level `env:` overlay,
 - `deploy.path`,

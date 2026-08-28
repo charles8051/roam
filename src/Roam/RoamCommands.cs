@@ -67,17 +67,33 @@ public sealed class RoamCommands
             ? System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(launchSettingsPath, cancellationToken)).RootElement.GetProperty("profiles").EnumerateObject().Select(x => x.Name).ToArray()
             : Array.Empty<string>();
 
-        var firstLaunch = launchProfiles.FirstOrDefault() ?? "Development";
         var projectName = Path.GetFileNameWithoutExtension(projectPath);
         var relativeSolution = chosenSolution is null ? null : Path.GetRelativePath(workingDirectory, Path.GetFullPath(chosenSolution, workingDirectory)).Replace('\\', '/');
         var relativeCsproj = Path.GetRelativePath(workingDirectory, projectPath).Replace('\\', '/');
-        var hostOs = DetectCurrentHostOs();
-        var defaultRid = DetectCurrentRid();
-        var publishYaml = publishProfiles.Length > 0
-            ? $"    publish-profile: {publishProfiles[0]}\n"
-            : $"    publish:\n      rid: {defaultRid}\n      self-contained: true\n      configuration: Release\n";
 
-        var content = $"version: 1\nproject: {projectName}\n{(relativeSolution is not null ? $"solution: {relativeSolution}" : $"csproj: {relativeCsproj}")}\n\nhosts:\n  local:\n    ssh: localhost\n    user: {Environment.UserName}\n    workspace: {workingDirectory.Replace('\\', '/')}\n    os: {hostOs}\n\nprofiles:\n  dev-local:\n    description: Publish and run everything on this machine.\n    source: local\n    build: local\n    target: local\n{publishYaml}    launch-profile: {firstLaunch}\n    deploy:\n      path: {workingDirectory.Replace('\\', '/')}/.roam-dev\n    debug:\n      enabled: true\n      debugger: vsdbg\n      editor: vscode\n      process-name: {projectName}\n";
+        // The scaffold writes only what roam cannot derive. Everything omitted here — version, the
+        // local host block, the three host roles, publish, deploy.path — is filled in by
+        // ConfigLoader's defaults; see docs/configuration.md ("Defaults").
+        var builder = new StringBuilder();
+        builder.Append(relativeSolution is not null
+            ? $"solution: {relativeSolution}\n"
+            : $"csproj: {relativeCsproj}\n");
+        builder.Append("\nprofiles:\n  dev-local:\n    description: Publish and run everything on this machine.\n");
+
+        if (publishProfiles.Length > 0)
+        {
+            builder.Append($"    publish-profile: {publishProfiles[0]}\n");
+        }
+
+        // Only pin a launch profile when the project has more than one; with zero or one, the
+        // default (first profile, or none at all) already picks the same thing.
+        if (launchProfiles.Length > 1)
+        {
+            builder.Append($"    launch-profile: {launchProfiles[0]}\n");
+        }
+
+        builder.Append($"    debug:\n      enabled: true\n      debugger: vsdbg\n      editor: vscode\n      process-name: {projectName}\n");
+        var content = builder.ToString();
 
         await File.WriteAllTextAsync(outputPath, content, cancellationToken);
         EnsureGitIgnoreHasRoam(workingDirectory);
@@ -1683,39 +1699,6 @@ public sealed class RoamCommands
         }
 
         return $"{left.TrimEnd('/')}/{right.TrimStart('/')}";
-    }
-
-    private static string DetectCurrentHostOs()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return "windows";
-        }
-
-        if (OperatingSystem.IsMacOS())
-        {
-            return "macos";
-        }
-
-        return "linux";
-    }
-
-    private static string DetectCurrentRid()
-    {
-        var os = DetectCurrentHostOs();
-        var arch = RuntimeInformation.OSArchitecture switch
-        {
-            Architecture.X64 => "x64",
-            Architecture.Arm64 => "arm64",
-            _ => throw new RoamException(ExitCode.Internal, "init", "local", $"unsupported architecture '{RuntimeInformation.OSArchitecture}' for roam init")
-        };
-
-        return os switch
-        {
-            "windows" => $"win-{arch}",
-            "macos" => $"osx-{arch}",
-            _ => $"linux-{arch}"
-        };
     }
 
     private sealed record ExecutionContext(

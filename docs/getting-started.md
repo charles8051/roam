@@ -57,10 +57,13 @@ export DOTNET_ROOT=/root/.dotnet
 
 ## 3. Make sure the .NET project has a launch profile and decide publish settings
 
-`roam` always needs a launch profile from `launchSettings.json`. For publish settings,
-`roam` now has two modes:
+`roam` uses a launch profile from `launchSettings.json` when the project has one,
+picking the first profile unless `launch-profile:` names another. A project
+without `launchSettings.json` runs with no launch profile. For publish settings,
+`roam` has two modes:
 
-1. preferred: declare a small `publish:` block in `roamfile.yaml`
+1. preferred: declare a small `publish:` block in `roamfile.yaml`, or omit it
+   and let `roam` synthesize one
 2. legacy/compatibility: reference a `.pubxml` via `publish-profile:`
 
 Recommended minimum project files:
@@ -103,26 +106,30 @@ Then edit `roamfile.yaml` for your real hosts. For copy/paste starting points, s
 
 ## 5. Minimal local-first roamfile
 
-Use this when source, build, and target are the same SSH-reachable machine:
+When source, build, and target are the same machine, roam derives all of them.
+This is a complete roamfile:
 
 ```yaml
-version: 1
-project: MyApp
-csproj: src/MyApp/MyApp.csproj
+profiles:
+  dev-local:
+    deploy:
+      start: ./MyApp
+```
 
-hosts:
-  local:
-    ssh: localhost
-    user: myuser
-    workspace: /home/myuser/src/myapp
-    os: linux
+`roam` fills in the schema version, the csproj (the single one in the repo), a
+`local` host pointing at this machine, the three host roles, a `publish:` block
+for this machine's RID, the launch profile, and a deploy path under the
+workspace. See [`configuration.md`](configuration.md#defaults) for the full list.
+
+The same profile written out, once you want control over where it lands and how
+it restarts:
+
+```yaml
+csproj: src/MyApp/MyApp.csproj
 
 profiles:
   dev-local:
     description: Build and run on this machine.
-    source: local
-    build: local
-    target: local
     publish:
       rid: linux-x64
       self-contained: true

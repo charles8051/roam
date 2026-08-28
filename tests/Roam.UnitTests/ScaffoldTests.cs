@@ -32,11 +32,24 @@ public sealed class ScaffoldTests
             await commands.RunInitAsync(new CliOptions(null, false, false, null, false), null, Path.Combine("src", "App", "App.csproj"), false, CancellationToken.None, temp.FullName);
 
             var content = await File.ReadAllTextAsync(Path.Combine(temp.FullName, "roamfile.yaml"));
-            Assert.Contains("launch-profile: Development", content);
+
+            // With no pubxml, the scaffold names no publish shape at all — ConfigLoader synthesizes
+            // the block, so writing it out would only be restating a default.
             Assert.DoesNotContain("publish-profile:", content);
-            Assert.Contains("publish:", content);
-            // Roam scaffolds the RID for the current host (RoamCommands.DetectCurrentRid),
-            // so this test must compute the same expectation rather than hardcode linux-x64.
+            Assert.DoesNotContain("publish:", content);
+
+            // Same for the single launch profile, the version, the local host, and the host roles.
+            Assert.DoesNotContain("launch-profile:", content);
+            Assert.DoesNotContain("version:", content);
+            Assert.DoesNotContain("hosts:", content);
+            Assert.DoesNotContain("source:", content);
+
+            Assert.Contains("csproj: src/App/App.csproj", content);
+            Assert.Contains("process-name: App", content);
+
+            // The scaffold must still round-trip through the loader it was written for.
+            var roamfile = ConfigLoader.Load(Path.Combine(temp.FullName, "roamfile.yaml"));
+            var profile = roamfile.Profiles["dev-local"];
             var arch = RuntimeInformation.OSArchitecture switch
             {
                 Architecture.X64 => "x64",
@@ -46,9 +59,13 @@ public sealed class ScaffoldTests
             var expectedRid = OperatingSystem.IsWindows() ? $"win-{arch}"
                             : OperatingSystem.IsMacOS()   ? $"osx-{arch}"
                                                           : $"linux-{arch}";
-            Assert.Contains($"rid: {expectedRid}", content);
-            Assert.Contains("self-contained: true", content);
-            Assert.Contains("configuration: Release", content);
+            Assert.Equal(expectedRid, profile.Publish!.Rid);
+            Assert.True(profile.Publish.SelfContained);
+            Assert.Equal("Release", profile.Publish.Configuration);
+            Assert.Equal("local", profile.Source);
+            Assert.Equal("local", profile.Build);
+            Assert.Equal("local", profile.Target);
+            Assert.Null(profile.LaunchProfile);
         }
         finally
         {
