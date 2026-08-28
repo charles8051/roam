@@ -1,0 +1,75 @@
+name: roam-lab
+
+services:
+  source:
+    build:
+      context: .
+      dockerfile: images/Dockerfile
+      network: host
+      args:
+        BASE_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0
+    hostname: source
+    environment:
+      ROAM_ROLE: source
+      ROAM_CREATE_WORKSPACE: /work/source/repo
+    networks:
+      - labnet
+    volumes:
+      - ../../fixtures/SampleApp:/work/source/fixture:ro
+      - ../../../:/work/roam:ro
+      - ./ssh_config:/lab-state/source/ssh_config:ro
+      - lab-state:/lab-state
+
+  build:
+    build:
+      context: .
+      dockerfile: images/Dockerfile
+      network: host
+      args:
+        BASE_IMAGE: mcr.microsoft.com/dotnet/sdk:10.0
+    hostname: build
+    environment:
+      ROAM_ROLE: build
+      ROAM_CREATE_WORKSPACE: /work/build/repo
+    networks:
+      - labnet
+    volumes:
+      - lab-state:/lab-state
+
+  target:
+    build:
+      context: .
+      dockerfile: images/Dockerfile
+      network: host
+      args:
+        BASE_IMAGE: mcr.microsoft.com/dotnet/runtime-deps:10.0
+    hostname: target
+    environment:
+      ROAM_ROLE: target
+      ROAM_CREATE_WORKSPACE: /opt/roam-fixture
+    networks:
+      - labnet
+    volumes:
+      - lab-state:/lab-state
+
+  bastion:
+    build:
+      context: .
+      dockerfile: images/Dockerfile
+      network: host
+      args:
+        BASE_IMAGE: mcr.microsoft.com/dotnet/runtime-deps:10.0
+    hostname: bastion
+    environment:
+      ROAM_ROLE: bastion
+    networks:
+      - labnet
+    volumes:
+      - lab-state:/lab-state
+
+networks:
+  labnet:
+    driver: bridge
+
+volumes:
+  lab-state:

@@ -1,0 +1,35 @@
+version: 1
+project: MyApp
+csproj: src/MyApp/MyApp.csproj
+
+hosts:
+  local:
+    ssh: localhost
+    user: myuser
+    workspace: /home/myuser/src/myapp
+    os: linux
+
+profiles:
+  dev-local:
+    description: Build, deploy, run, and debug on the same Linux host.
+    source: local
+    build: local
+    target: local
+    publish:
+      rid: linux-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Development
+    deploy:
+      path: /home/myuser/apps/myapp
+      flatten-publish: true
+      stop: pkill -f '[M]yApp' || true
+      start: nohup /home/myuser/apps/myapp/MyApp >/tmp/myapp.log 2>&1 &
+      ready: pgrep -f MyApp >/dev/null
+      ready-timeout: 20
+      ready-interval-ms: 500
+    debug:
+      enabled: true
+      debugger: vsdbg
+      editor: vscode
+      process-name: MyApp

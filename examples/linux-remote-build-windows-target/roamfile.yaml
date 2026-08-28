@@ -1,0 +1,46 @@
+version: 1
+project: DesktopUi
+csproj: src/DesktopUi/DesktopUi.csproj
+
+hosts:
+  laptop:
+    ssh: laptop.tailnet.example
+    user: dev
+    workspace: /home/dev/src/desktop-ui
+    os: linux
+  buildbox:
+    ssh: buildbox.tailnet.example
+    user: dev
+    workspace: /home/dev/src/desktop-ui
+    os: linux
+  desktop-win:
+    ssh: desktop-win.tailnet.example
+    user: dev
+    os: windows
+
+profiles:
+  windows-demo:
+    description: Publish on Linux buildbox and run a self-contained Windows target build.
+    source: laptop
+    build: buildbox
+    target: desktop-win
+    publish:
+      rid: win-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Development
+    env:
+      DOTNET_ENVIRONMENT: Development
+    deploy:
+      path: C:/roam/desktop-ui
+      flatten-publish: true
+      stop: powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process DesktopUi -ErrorAction SilentlyContinue | Stop-Process -Force"
+      start: powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath C:/roam/desktop-ui/DesktopUi.exe -WorkingDirectory C:/roam/desktop-ui"
+      ready: powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-Process DesktopUi -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
+      ready-timeout: 30
+      ready-interval-ms: 500
+    debug:
+      enabled: true
+      debugger: vsdbg
+      editor: vscode
+      process-name: DesktopUi

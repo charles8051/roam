@@ -1,0 +1,77 @@
+# Cross-platform deploy lab: Linux controller -> {Linux, Windows} targets.
+# The from-Linux half of the 2x2 matrix; roamfile.linux.yaml and roamfile.win.yaml are the
+# from-Windows half. `to-linux` exercises the Unix-controller exec-bit path (roam mirrors the
+# real source mode), bash PATH resolution and `detach`; `to-windows` drives the Windows
+# scheduled-task ceremony from a Linux controller.
+#
+# SSH auth: the controller must present a key authorized on the targets. A workstation or CI
+# runner uses its default ~/.ssh/id_ed25519; for an ad-hoc controller add
+# `identity-file: <path>` under each target host.
+#
+# Driven by hand, not at commit time. Addresses below are placeholders; substitute your own
+# hosts or ssh-config aliases.
+version: 1
+csproj: SampleApp/SampleApp.csproj
+
+hosts:
+  local:
+    ssh: localhost
+    os: linux            # the controller (source + build)
+  linux01:
+    ssh: linux-target.example    # replace with your own host
+    user: deploy
+    os: linux
+  win01:
+    ssh: windows-target.example    # replace with your own host
+    user: deploy
+    os: windows
+
+profiles:
+  to-linux:
+    description: Linux controller -> Linux target (self-contained linux-x64, detached service).
+    source: local
+    build: local
+    target: linux01
+    publish:
+      rid: linux-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Default
+    deploy:
+      path: /home/deploy/roam-xplat-ll
+      flatten-publish: true
+      detach: true
+      stop: pkill -x SampleApp || true
+      start: /home/deploy/roam-xplat-ll/SampleApp
+      ready: pgrep -x SampleApp
+      ready-timeout: 25
+      ready-interval-ms: 1000
+      diag:
+        logs: [sampleapp.diag.log]
+        crash-dumps: true   # L->L: Linux controller uses bash transport, so env-prefixed detach is fine
+    debug:
+      enabled: false
+
+  to-windows:
+    description: Linux controller -> Windows target (self-contained win-x64, interactive-session).
+    source: local
+    build: local
+    target: win01
+    publish:
+      rid: win-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Default
+    deploy:
+      path: C:/Users/deploy/roam-xplat-lw
+      flatten-publish: true
+      interactive-session: true
+      stop: Get-Process SampleApp -ErrorAction SilentlyContinue | Stop-Process -Force
+      start: C:/Users/deploy/roam-xplat-lw/SampleApp.exe
+      ready: Get-Process SampleApp -ErrorAction Stop | Select-Object -First 1
+      ready-timeout: 25
+      ready-interval-ms: 1000
+      diag:
+        logs: [sampleapp.diag.log]
+    debug:
+      enabled: false

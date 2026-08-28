@@ -1,0 +1,84 @@
+# Canonical v0 roamfile used by the Compose integration lab and as a
+# concrete example for the schema in docs/roamfile.schema.json.
+version: 1
+project: Roam.SampleApp
+csproj: SampleApp.csproj
+
+hosts:
+  source:
+    ssh: source
+    user: roam
+    workspace: /work/source/repo
+    os: linux
+  build:
+    ssh: build
+    user: roam
+    workspace: /work/build/repo
+    os: linux
+  target:
+    ssh: target
+    user: roam
+    os: linux
+
+profiles:
+
+  dev-local:
+    description: Publish and run the fixture entirely on the source container.
+    source: source
+    build: source
+    target: source
+    publish-profile: TestPortable
+    launch-profile: Development
+    deploy:
+      path: /opt/roam-fixture
+      flatten-publish: true
+      stop: pkill -f '[R]oam.SampleApp' || true
+      start: nohup /opt/roam-fixture/Roam.SampleApp >/tmp/roam-fixture.log 2>&1 &
+      ready-timeout: 10
+      ready-interval-ms: 500
+    debug:
+      enabled: false
+
+  workstation-to-laptop:
+    description: Publish on the build container, run on the source container.
+    source: source
+    build: build
+    target: source
+    publish-profile: TestLinuxX64SelfContained
+    launch-profile: Development
+    env:
+      SAMPLEAPP_MODE: healthy
+    deploy:
+      path: /opt/roam-fixture
+      flatten-publish: true
+      stop: pkill -f '[R]oam.SampleApp' || true
+      start: nohup /opt/roam-fixture/Roam.SampleApp >/tmp/roam-fixture.log 2>&1 &
+      ready-timeout: 15
+    debug:
+      enabled: true
+      debugger: vsdbg
+      editor: vscode
+      process-name: Roam.SampleApp
+
+  kiosk:
+    description: Build on the build container, deploy to the target container.
+    source: source
+    build: build
+    target: target
+    publish-profile: TestLinuxX64SelfContained
+    launch-profile: Production
+    env:
+      SAMPLEAPP_MODE: healthy
+      SAMPLEAPP_READY_FILE: /tmp/roam-fixture/ready
+    deploy:
+      path: /opt/roam-fixture
+      flatten-publish: true
+      stop: pkill -f '[R]oam.SampleApp' || true
+      start: nohup /opt/roam-fixture/Roam.SampleApp --ready-file /tmp/roam-fixture/ready >/tmp/roam-fixture.log 2>&1 &
+      ready: test -f /tmp/roam-fixture/ready
+      ready-timeout: 20
+    debug:
+      enabled: true
+      debugger: vsdbg
+      editor: vscode
+      process-name: Roam.SampleApp

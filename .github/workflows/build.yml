@@ -1,0 +1,95 @@
+name: Build and Test
+
+# Manual dispatch only — pick which OSes to run. Cross-platform runs are
+# expensive in runner-minutes, so we don't auto-trigger on push or PR.
+# The dispatched run still validates the full build + unit-test pipeline
+# on whichever subset of OSes you tick.
+on:
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: 'Run on windows-latest'
+        type: boolean
+        default: true
+      linux:
+        description: 'Run on ubuntu-latest'
+        type: boolean
+        default: true
+      macos:
+        description: 'Run on macos-latest'
+        type: boolean
+        default: true
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  # Build the OS matrix from the dispatch inputs. Fails fast if no OS
+  # was selected — the job log shows the error so the user knows why.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.os.outputs.matrix }}
+    steps:
+      - id: os
+        shell: bash
+        run: |
+          OSES=()
+          [ "${{ inputs.windows }}" = "true" ] && OSES+=('"windows-latest"')
+          [ "${{ inputs.linux }}" = "true" ] && OSES+=('"ubuntu-latest"')
+          [ "${{ inputs.macos }}" = "true" ] && OSES+=('"macos-latest"')
+          if [ ${#OSES[@]} -eq 0 ]; then
+            echo "::error::No OS selected — tick at least one of windows / linux / macos."
+            exit 1
+          fi
+          ( IFS=,; echo "matrix={\"os\":[${OSES[*]}]}" >> "$GITHUB_OUTPUT" )
+
+  test:
+    needs: setup
+    strategy:
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # MinVer needs full history to derive version from tags.
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Roam.slnx
+
+      - name: Build
+        run: dotnet build Roam.slnx --configuration Release --no-restore
+
+      - name: Test
+        shell: bash
+        # ComposeLab tests are filtered out; they spin up a docker-compose
+        # lab via SSH and aren't suitable for hosted runners. Add other
+        # lab categories to this filter as they appear.
+        #
+        # `dotnet test Roam.slnx` only runs the test projects the .slnx
+        # actually lists. A malformed .slnx (e.g. physically nested <Folder>
+        # elements) makes the SDK parser silently drop projects, so the run
+        # finds zero tests and still exits 0 — keep test projects as direct
+        # children of their <Folder> and verify with `dotnet sln list`. The
+        # Upload step's if-no-files-found guard backstops a silent empty run.
+        run: dotnet test Roam.slnx --configuration Release --no-build --filter "Category!=ComposeLab" --logger "trx;LogFileName=test-${{ matrix.os }}.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: "**/test-*.trx"
+          # Fail the job if no trx was produced. `dotnet test` emits a trx
+          # only when it actually discovers and runs a test project, so "no
+          # files found" means the run was empty — turn that silent green
+          # red instead of shipping untested code.
+          if-no-files-found: error
+          retention-days: 14

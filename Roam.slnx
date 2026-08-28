@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Roam/Roam.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Roam.UnitTests/Roam.UnitTests.csproj" />
+    <Project Path="tests/Roam.IntegrationTests/Roam.IntegrationTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/fixtures/">
+    <Project Path="tests/fixtures/SampleApp/SampleApp.csproj" />
+  </Folder>
+</Solution>

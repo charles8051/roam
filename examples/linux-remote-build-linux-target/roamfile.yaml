@@ -1,0 +1,46 @@
+version: 1
+project: KioskUi
+csproj: src/KioskUi/KioskUi.csproj
+
+hosts:
+  laptop:
+    ssh: laptop.tailnet.example
+    user: dev
+    workspace: /home/dev/src/kiosk-ui
+    os: linux
+  workstation:
+    ssh: workstation.tailnet.example
+    user: dev
+    workspace: /home/dev/src/kiosk-ui
+    os: linux
+  kiosk-01:
+    ssh: kiosk-01.tailnet.example
+    user: kiosk
+    os: linux
+
+profiles:
+  kiosk:
+    description: Edit on laptop, publish on workstation, deploy to Linux kiosk.
+    source: laptop
+    build: workstation
+    target: kiosk-01
+    publish:
+      rid: linux-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Production
+    env:
+      DOTNET_ENVIRONMENT: Production
+    deploy:
+      path: /opt/kiosk-ui
+      flatten-publish: true
+      stop: systemctl --user stop kiosk-ui || true
+      start: systemctl --user start kiosk-ui
+      ready: systemctl --user is-active --quiet kiosk-ui
+      ready-timeout: 30
+      ready-interval-ms: 500
+    debug:
+      enabled: true
+      debugger: vsdbg
+      editor: vscode
+      process-name: KioskUi

@@ -1,0 +1,28 @@
+Host build
+  HostName build
+  User roam
+  IdentityFile /home/roam/.ssh/id_ed25519
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host target target-direct
+  HostName target
+  User roam
+  IdentityFile /home/roam/.ssh/id_ed25519
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host bastion
+  HostName bastion
+  User roam
+  IdentityFile /home/roam/.ssh/id_ed25519
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host target-via-bastion
+  HostName target
+  User roam
+  IdentityFile /home/roam/.ssh/id_ed25519
+  ProxyJump bastion
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null

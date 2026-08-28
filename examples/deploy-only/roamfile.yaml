@@ -1,0 +1,41 @@
+version: 1
+project: EdgeWorker
+csproj: src/EdgeWorker/EdgeWorker.csproj
+
+hosts:
+  source:
+    ssh: devbox.tailnet.example
+    user: dev
+    workspace: /home/dev/src/edge-worker
+    os: linux
+  build:
+    ssh: buildbox.tailnet.example
+    user: dev
+    workspace: /home/dev/src/edge-worker
+    os: linux
+  edge-01:
+    ssh: edge-01.tailnet.example
+    user: edge
+    os: linux
+
+profiles:
+  edge:
+    description: Deploy to edge host without generating debugger attach config.
+    source: source
+    build: build
+    target: edge-01
+    publish:
+      rid: linux-arm64
+      self-contained: true
+      configuration: Release
+    launch-profile: Production
+    deploy:
+      path: /opt/edge-worker
+      flatten-publish: true
+      stop: sudo systemctl stop edge-worker || true
+      start: sudo systemctl start edge-worker
+      ready: systemctl is-active --quiet edge-worker
+      ready-timeout: 45
+      ready-interval-ms: 1000
+    debug:
+      enabled: false

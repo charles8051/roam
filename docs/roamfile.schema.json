@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/charles8051/roam/docs/roamfile.schema.json",
+  "title": "roamfile",
+  "description": "Schema for roamfile.yaml, v0. See docs/configuration.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "hosts", "profiles"],
+  "properties": {
+    "version": {
+      "description": "roamfile schema version. v0 requires 1.",
+      "type": "integer",
+      "enum": [1]
+    },
+    "project": {
+      "description": "Human-readable project name. Informational only.",
+      "type": "string"
+    },
+    "solution": {
+      "description": "Path to the .sln file, relative to the workspace root.",
+      "type": "string"
+    },
+    "csproj": {
+      "description": "Path to a single csproj, used when there is no solution.",
+      "type": "string"
+    },
+    "hosts": {
+      "description": "Named SSH hosts used by profiles.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/host" }
+    },
+    "profiles": {
+      "description": "Named dev scenarios. Each profile runs the fixed pipeline.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "oneOf": [
+    { "required": ["solution"] },
+    { "required": ["csproj"] }
+  ],
+  "$defs": {
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ssh": {
+          "description": "Hostname or ssh_config alias. Required when ssh -G is unavailable.",
+          "type": "string"
+        },
+        "user": {
+          "description": "SSH user. Falls back to ssh -G resolution when omitted.",
+          "type": "string"
+        },
+        "port": {
+          "description": "SSH port. Default 22.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "identity-file": {
+          "description": "Path to an SSH private key, resolved on the source host.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace root for source/build roles. Target hosts ignore this field.",
+          "type": "string"
+        },
+        "os": {
+          "description": "Target OS family. roam supports linux, macos, and windows targets.",
+          "type": "string",
+          "enum": ["linux", "macos", "windows"]
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "build", "target", "launch-profile", "deploy"],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "source": {
+          "description": "Host key from hosts: that plays the source role.",
+          "type": "string"
+        },
+        "build": {
+          "description": "Host key from hosts: that runs dotnet publish.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Host key from hosts: that runs the published binary.",
+          "type": "string"
+        },
+        "publish-profile": {
+          "description": "Legacy compatibility: name of a Properties/PublishProfiles/*.pubxml file (without extension).",
+          "type": "string"
+        },
+        "publish": {
+          "$ref": "#/$defs/publish"
+        },
+        "launch-profile": {
+          "description": "Profile name from Properties/launchSettings.json.",
+          "type": "string"
+        },
+        "env": {
+          "description": "Environment variables layered on top of launchSettings.json for this profile. Profile wins on conflict.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "deploy": { "$ref": "#/$defs/deploy" },
+        "run": { "$ref": "#/$defs/run" },
+        "debug": { "$ref": "#/$defs/debug" }
+      },
+      "oneOf": [
+        { "required": ["publish-profile"] },
+        { "required": ["publish"] }
+      ]
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rid"],
+      "properties": {
+        "rid": {
+          "description": "Runtime identifier passed to dotnet publish --runtime.",
+          "type": "string"
+        },
+        "self-contained": {
+          "description": "Whether dotnet publish uses --self-contained true/false. Default true.",
+          "type": "boolean",
+          "default": true
+        },
+        "configuration": {
+          "description": "Build configuration passed to dotnet publish --configuration.",
+          "type": "string"
+        },
+        "framework": {
+          "description": "Optional target framework passed to dotnet publish --framework.",
+          "type": "string"
+        }
+      }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "description": "Absolute deploy directory on the target host.",
+          "type": "string"
+        },
+        "flatten-publish": {
+          "description": "If true, the contents of publish/ land directly at deploy.path. Default: false.",
+          "type": "boolean",
+          "default": false
+        },
+        "stop": {
+          "description": "Shell command run on target to stop the process before sync-artifacts.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Shell command run on target to start the process after sync-artifacts.",
+          "type": "string"
+        },
+        "ready": {
+          "description": "Optional readiness probe. When omitted, roam polls pgrep -x <debug.process-name>.",
+          "type": "string"
+        },
+        "ready-timeout": {
+          "description": "Seconds to wait for the readiness probe. Default 15.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 15
+        },
+        "ready-interval-ms": {
+          "description": "Poll interval for the readiness probe in milliseconds. Default 500.",
+          "type": "integer",
+          "minimum": 50,
+          "default": 500
+        },
+        "interactive-session": {
+          "description": "When true and the target host is Windows, roam wraps the start command in a Scheduled Task (-LogonType Interactive) so the process launches in the logged-on user's desktop session instead of SSH session 0. Required for Avalonia/WPF GUIs over OpenSSH.",
+          "type": "boolean",
+          "default": false
+        },
+        "interactive-session-trigger": {
+          "description": "Opt-in reboot durability for the interactive-session scheduled task (Windows, service mode). When 'at-logon', roam attaches a New-ScheduledTaskTrigger -AtLogOn bound to the target user, so the task relaunches the workload on the next logon -- restoring it after a reboot without another `roam run`. Requires interactive-session: true and the target user to be logged on (autologon for a headless station). Unset (the default) registers no trigger -- today's behavior, where the task does not restart after a reboot.",
+          "type": "string",
+          "enum": ["at-logon"]
+        },
+        "run-level": {
+          "description": "Integrity level for the interactive-session scheduled task (Windows, service mode). 'limited' (the default) registers the task principal -RunLevel Limited, so the workload runs non-elevated -- today's behavior, fully back-compat. 'highest' registers -RunLevel Highest so the workload runs elevated (High IL) in the interactive desktop session; Task Scheduler launches it without a UAC prompt when the principal user is a local admin. Only consulted when interactive-session: true.",
+          "type": "string",
+          "enum": ["limited", "highest"],
+          "default": "limited"
+        },
+        "detach": {
+          "description": "Unix-target durability -- the analog of interactive-session on Windows. When true and the target host is non-Windows, roam wraps `roam run`'s start command in `nohup sh -c '...' < /dev/null > <deploy.path>/roam-<profile>.out 2>&1 &` so the service survives the SSH channel closing once the start step returns. Default false runs the start inline (it dies with the channel unless the command daemonizes itself). Ignored on Windows targets (which use the interactive-session scheduled task) and for `roam deploy` register-without-start. Reboot durability is a separate systemd story.",
+          "type": "boolean",
+          "default": false
+        },
+        "transfer": {
+          "description": "How sync-artifacts moves files to the target. 'per-file' (default) sends each changed file over SFTP. 'archive' packs the changed set into one tar.gz, transfers it once, and extracts it remotely with tar -- collapsing N per-file SFTP round-trips into one, a large win on high-latency links during cold deploys. Requires tar on the target (Windows 10 1803+/Server 2019+ and all Linux/macOS ship it).",
+          "type": "string",
+          "enum": ["per-file", "archive"],
+          "default": "per-file"
+        },
+        "uninstall": {
+          "description": "Free-form shell command run on the target by `roam uninstall <profile>`. Parallel to deploy.start, but in the tear-down direction: stop processes, remove scheduled tasks/services/firewall rules, delete deploy.path. When omitted, roam falls back to stop-process + remove deploy.path + wipe local manifest, with a warning. See docs/cli.md (`roam uninstall`).",
+          "type": "string"
+        },
+        "provenance": {
+          "description": "Globs selecting which deployed managed assemblies roam reports versions for after a deploy. After sync-artifacts, roam reads each matching assembly's AssemblyInformationalVersion (falling back to file/assembly version) and prints a one-line diff against the previous deploy, highlighting any assembly whose version AND bytes did not change -- the red flag for a stale local-feed package. Globs match the file name only and accept * and ? (e.g. 'Contoso.*', 'Fabrikam.*'). When omitted, roam reports just the project's own primary output assembly. See docs/state.md (deployed-versions.json).",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "debug": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "If false, roam attach is a no-op for this profile.",
+          "type": "boolean",
+          "default": false
+        },
+        "debugger": {
+          "description": "Which debugger the emitted config targets. v0 requires vsdbg.",
+          "type": "string",
+          "enum": ["vsdbg"]
+        },
+        "editor": {
+          "description": "Editor target for the emitted config. v0 requires vscode.",
+          "type": "string",
+          "enum": ["vscode"]
+        },
+        "process-name": {
+          "description": "Process name used by the default readiness probe and the emitted launch.json processName. Defaults to the csproj AssemblyName.",
+          "type": "string"
+        },
+        "install-on-target": {
+          "description": "Future: install the debugger on the target during deploy. v0 ignores this field for vsdbg and rejects true for now.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "Execution lifecycle after sync-artifacts. 'service' starts a long-running process and polls readiness. 'one-shot' runs command in the foreground and succeeds when it exits with an allowed code. Default service.",
+          "type": "string",
+          "enum": ["service", "one-shot"],
+          "default": "service"
+        },
+        "command": {
+          "description": "Target-host command to execute after sync-artifacts. Required for one-shot mode. In service mode, this supersedes deploy.start when run: is present.",
+          "type": "string"
+        },
+        "stop": {
+          "description": "Optional target-host command run before sync-artifacts. Supersedes deploy.stop when run: is present.",
+          "type": "string"
+        },
+        "ready": {
+          "description": "Service-mode readiness probe. Supersedes deploy.ready when run: is present.",
+          "type": "string"
+        },
+        "ready-timeout": {
+          "description": "Service-mode seconds to wait for the readiness probe. Defaults to deploy.ready-timeout.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "ready-interval-ms": {
+          "description": "Service-mode readiness poll interval in milliseconds. Defaults to deploy.ready-interval-ms.",
+          "type": "integer",
+          "minimum": 50
+        },
+        "interactive-session": {
+          "description": "Service-mode Windows GUI launch support. Same behavior as deploy.interactive-session, but scoped to run:.",
+          "type": "boolean",
+          "default": false
+        },
+        "interactive-session-trigger": {
+          "description": "Reboot durability for the interactive-session scheduled task, scoped to run:. Same behavior and values as deploy.interactive-session-trigger.",
+          "type": "string",
+          "enum": ["at-logon"]
+        },
+        "run-level": {
+          "description": "Integrity level for the interactive-session scheduled task, scoped to run:. Same behavior and values as deploy.run-level.",
+          "type": "string",
+          "enum": ["limited", "highest"],
+          "default": "limited"
+        },
+        "detach": {
+          "description": "Unix-target durability, scoped to run:. Same behavior as deploy.detach: wraps a service-mode start in a backgrounded nohup on a non-Windows target so it survives the SSH channel close.",
+          "type": "boolean",
+          "default": false
+        },
+        "timeout": {
+          "description": "One-shot mode timeout in seconds. Default 60.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        },
+        "success-exit-codes": {
+          "description": "One-shot mode exit codes treated as success. Default [0].",
+          "type": "array",
+          "items": { "type": "integer" },
+          "default": [0]
+        }
+      }
+    }
+  }
+}

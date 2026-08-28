@@ -1,0 +1,45 @@
+# Cross-platform deploy lab: Windows controller -> Linux target.
+# Proves that a self-contained linux-x64 apphost published from a Windows controller (which
+# cannot write Unix modes) lands executable, and exercises the opt-in Unix `detach` durability.
+# Driven by hand, not at commit time -- it needs two real machines. Addresses below are
+# placeholders; substitute your own hosts or ssh-config aliases.
+version: 1
+csproj: SampleApp/SampleApp.csproj
+
+hosts:
+  local:
+    ssh: localhost
+    os: windows          # the controller (source + build)
+  linux01:
+    ssh: linux-target.example    # replace with your target's host or ssh-config alias
+    user: deploy
+    os: linux
+
+profiles:
+  linux-target:
+    description: Build a self-contained linux-x64 app on the Windows controller, deploy to the Linux VM.
+    source: local
+    build: local
+    target: linux01
+    publish:
+      rid: linux-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Default
+    deploy:
+      path: /home/deploy/roam-xplat
+      flatten-publish: true
+      detach: true        # nohup-background so the service survives the SSH channel close
+      # Match by process NAME (-x), not cmdline (-f): `pkill -f .../SampleApp` matches its own
+      # shell (whose cmdline contains "SampleApp") and kills it before `|| true` runs (exit 255).
+      stop: pkill -x SampleApp || true
+      start: /home/deploy/roam-xplat/SampleApp
+      ready: pgrep -x SampleApp
+      ready-timeout: 25
+      ready-interval-ms: 1000
+      diag:
+        logs: [sampleapp.diag.log]
+        crash-dumps: true   # works W->L after the argv SSH-transport fix: the env-prefixed detach
+                            # start command now reaches the remote shell intact (no pwsh re-parse).
+    debug:
+      enabled: false

@@ -1,0 +1,72 @@
+name: CI
+
+# The always-on gate: build and unit-test on every PR and every push to main.
+#
+# build.yml is the cross-platform matrix and stays workflow_dispatch-only, because
+# a three-OS matrix on every push is expensive in runner minutes. This is the cheap
+# Linux-only always-on half, so a pull request -- including one from a fork --
+# always gets a real check instead of no check at all.
+#
+# Entirely GitHub-hosted. This repository targets no self-hosted runner, so it
+# needs no fork guard: there is nothing for an untrusted PR to land on.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # MinVer derives the version from the nearest tag; the default shallow
+          # checkout fetches none and would version every build 0.0.0-alpha.0.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore Roam.slnx
+
+      - name: Build
+        run: dotnet build Roam.slnx --configuration Release --no-restore
+
+      # ComposeLab tests are filtered out: they spin up a docker-compose lab over
+      # SSH and are not suitable for a hosted runner. Add other lab categories to
+      # this filter as they appear.
+      - name: Test
+        run: >
+          dotnet test Roam.slnx --configuration Release --no-build
+          --filter "Category!=ComposeLab"
+          --logger "trx;LogFileName=test-ubuntu.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-ci
+          path: "**/test-*.trx"
+          # A build failure leaves no trx. Do not bury the real error under a
+          # second one about the missing artifact.
+          if-no-files-found: warn
+          retention-days: 14

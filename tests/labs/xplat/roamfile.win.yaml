@@ -1,0 +1,44 @@
+# Cross-platform deploy lab: Windows controller -> Windows target.
+# The regression cell of the 2x2 matrix: the Windows target path is unchanged by the
+# cross-platform hardening, so this confirms roam still deploys Windows-to-Windows.
+# Driven by hand, not at commit time. Addresses below are placeholders; substitute your own
+# hosts or ssh-config aliases.
+version: 1
+csproj: SampleApp/SampleApp.csproj
+
+hosts:
+  local:
+    ssh: localhost
+    os: windows          # the controller (source + build)
+  win01:
+    ssh: windows-target.example    # replace with your target's host or ssh-config alias
+    user: deploy
+    os: windows
+
+profiles:
+  win-target:
+    description: Build a self-contained win-x64 app on the Windows controller, deploy to the Windows VM.
+    source: local
+    build: local
+    target: win01
+    publish:
+      rid: win-x64
+      self-contained: true
+      configuration: Release
+    launch-profile: Default
+    deploy:
+      path: C:/Users/deploy/roam-xplat
+      flatten-publish: true
+      # interactive-session: run the process via a scheduled task in the autologon desktop session
+      # (session 1) so it survives the SSH channel close -- the Windows durability mechanism, the
+      # counterpart to Unix `detach`. A console app runs fine there (no window).
+      interactive-session: true
+      stop: Get-Process SampleApp -ErrorAction SilentlyContinue | Stop-Process -Force
+      start: C:/Users/deploy/roam-xplat/SampleApp.exe
+      ready: Get-Process SampleApp -ErrorAction Stop | Select-Object -First 1
+      ready-timeout: 25
+      ready-interval-ms: 1000
+      diag:
+        logs: [sampleapp.diag.log]
+    debug:
+      enabled: false

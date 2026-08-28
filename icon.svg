@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Roam">
+  <title>Roam</title>
+  <rect width="128" height="128" rx="26" fill="#163A29"/>
+  <!-- the hop, over a link -->
+  <path d="M32 74 C32 26 96 26 96 74" fill="none" stroke="#40916C" stroke-width="4.5"
+        stroke-linecap="round" stroke-dasharray="0.5 10"/>
+  <!-- build host and target host -->
+  <g fill="#163A29" stroke="#40916C" stroke-width="5">
+    <rect x="18.5" y="76.5" width="27" height="27" rx="6"/>
+    <rect x="82.5" y="76.5" width="27" height="27" rx="6"/>
+  </g>
+  <!-- the payload in flight -->
+  <circle cx="64" cy="38" r="8.5" fill="#D8F3DC" stroke="#163A29" stroke-width="2.5"/>
+</svg>
