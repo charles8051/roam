@@ -73,11 +73,14 @@ explicit status. If a change supersedes an earlier record, say so in both files.
 Releases are cut by pushing a `v*` tag. `MinVer` derives the package version from that tag, so an
 untagged build produces a `0.0.0`-shaped version rather than a release one.
 
-There is currently no publish automation. The old workflow pushed to a private feed, which a public
-repository cannot use; it will be rebuilt on
-[nuget.org trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing), which
-replaces a stored API key with short-lived OIDC credentials. Until then, packing and publishing is
-manual and maintainer-only.
+`.github/workflows/publish.yml` builds, tests, packs and pushes `Roam.Cli` to nuget.org. It
+authenticates with [trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing) —
+GitHub issues a short-lived OIDC token and nuget.org exchanges it for a key valid for one hour. No
+long-lived key is stored in this repository.
+
+Only the maintainer can cut a release. The job runs in the `nuget.org` environment, and the policy is
+bound to this repository and to the filename `publish.yml`, so renaming that file stops publishing until
+the policy is updated.
 
 ## Licence
 

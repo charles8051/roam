@@ -8,6 +8,8 @@
     <AssemblyName>SampleApp</AssemblyName>
     <!-- Keep the self-contained publish small and dependency-free; this is a deploy smoke target. -->
     <InvariantGlobalization>true</InvariantGlobalization>
+      <!-- A test fixture, not a shipped package. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>
