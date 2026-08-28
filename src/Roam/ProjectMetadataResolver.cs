@@ -154,11 +154,19 @@ public static class ProjectMetadataResolver
         return multi?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
     }
 
-    public static LaunchProfileInfo LoadLaunchProfile(ResolvedProjectPaths paths, string profileName)
+    // profileName is null when the roamfile omits `launch-profile:`. Then the first profile in
+    // launchSettings.json wins, and a project with no launchSettings.json runs with no launch
+    // profile at all rather than failing preflight. A named profile must still exist.
+    public static LaunchProfileInfo LoadLaunchProfile(ResolvedProjectPaths paths, string? profileName)
     {
         var launchSettingsPath = Path.Combine(paths.ProjectDirectory, "Properties", "launchSettings.json");
         if (!File.Exists(launchSettingsPath))
         {
+            if (profileName is null)
+            {
+                return new LaunchProfileInfo("(none)", null, null, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            }
+
             throw new RoamException(ExitCode.Preflight, "preflight", "local", $"launch settings not found at '{Path.GetRelativePath(paths.WorkspaceRoot, launchSettingsPath)}'");
         }
 
@@ -170,7 +178,7 @@ public static class ProjectMetadataResolver
 
         foreach (var child in profilesElement.EnumerateObject())
         {
-            if (!string.Equals(child.Name, profileName, StringComparison.Ordinal))
+            if (profileName is not null && !string.Equals(child.Name, profileName, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -189,6 +197,12 @@ public static class ProjectMetadataResolver
                 child.Value.TryGetProperty("commandName", out var commandName) ? commandName.GetString() : null,
                 child.Value.TryGetProperty("commandLineArgs", out var args) ? args.GetString() : null,
                 env);
+        }
+
+        // Only reachable for a null profileName when launchSettings.json declares no profiles.
+        if (profileName is null)
+        {
+            return new LaunchProfileInfo("(none)", null, null, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         }
 
         var known = profilesElement.EnumerateObject().Select(x => x.Name).ToArray();

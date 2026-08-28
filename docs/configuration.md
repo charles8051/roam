@@ -243,6 +243,10 @@ profiles:
       process-name: KioskUi
 ```
 
+That example spells out every field. Most of them have defaults — see
+[Defaults](#defaults) below for what you can leave out, and the minimal
+roamfile that results.
+
 The parser is **strict**: unknown top-level keys, unknown host fields,
 unknown profile fields, and unknown `deploy`/`debug` fields are
 rejected with a `config` error (exit `3` — see
@@ -275,6 +279,56 @@ lives in the file that already owns it. Roam intentionally keeps the
 publish contract small; if a project truly needs richer MSBuild-only
 publish behavior, `publish-profile:` remains available as a compatibility
 path.
+
+## Defaults
+
+Strictness is about *unknown* keys, not *absent* ones. Most fields have a
+default, and the schema version does not change when a field that used to be
+required becomes derivable — every roamfile that parsed before parses to the
+same records now.
+
+| Key | Default when omitted |
+|-------------------------------|------------------------------------------------------------------|
+| `version` | `1` |
+| `csproj` / `solution` | the single `.csproj` under the roamfile directory, ignoring `bin/` and `obj/`. More than one is a `config` error naming the candidates |
+| `hosts` | a single synthesized host named `local`: `ssh: localhost`, the current user, the roamfile's directory as `workspace`, and the controller's OS |
+| host body | empty is legal. `ssh:` falls back to the host key; `user`, `port`, and `identity-file` to `ssh -G` |
+| `hosts.<name>.workspace` | the roamfile's directory for a host used as `source`; `~/.roam/src/<project>` for any other host |
+| `source` | the only defined host, or `local` when a host has that name. With several hosts and no `local`, a `config` error |
+| `build`, `target` | `source` |
+| `publish` | a synthesized block when the profile names neither `publish` nor `publish-profile` |
+| `publish.rid` | the target host's declared `os` (the controller's, when the target declares none) plus the controller's architecture |
+| `publish.self-contained` | `true` |
+| `publish.configuration` | `Release` — **only** in a fully synthesized block. An explicit `publish:` that omits it keeps `dotnet`'s own default |
+| `launch-profile` | the first profile in `launchSettings.json`; no launch profile at all when the project has no `launchSettings.json` |
+| `deploy` | empty is legal |
+| `deploy.path` | `<workspace>/.roam-dev` when the target is the source host; `~/.roam/apps/<project>` otherwise |
+
+Two of these are worth reading twice.
+
+`source:` names the machine `roam` is running on, and `build`/`target` decide
+whether they are local by comparing their own name against it. That is why a
+single-host roamfile needs no roles at all, and why a multi-host roamfile must
+still say which host is `source`.
+
+`publish.configuration` defaults to `Release` only when roam invents the whole
+`publish:` block. Inside a block you wrote, an omitted `configuration` still
+means "whatever `dotnet publish` picks", which is `Debug`. Defaulting it there
+would silently change what existing profiles build.
+
+### The minimal roamfile
+
+Everything above collapses to one profile and the command that starts it:
+
+```yaml
+profiles:
+  dev-local:
+    deploy:
+      start: ./MyApp
+```
+
+That is a complete roamfile for a single-project repo deploying to the machine
+it is checked out on. `roam init` writes roughly this, plus a `debug:` block.
 
 ## What `roam` owns vs. consumes vs. emits
 
@@ -602,10 +656,10 @@ bootstrap a working `roamfile.yaml`:
 1. Locate the solution or csproj.
 2. Enumerate `Properties/PublishProfiles/*.pubxml` and
    `Properties/launchSettings.json` profiles.
-3. For each discovered publish profile, create a starter `roam`
-   profile that targets `laptop` (the host running `roam init`) as
-   all three roles. This gives the user a working `dev-local` baseline
-   with zero additional input.
+3. Write a starter `dev-local` profile. It names only what roam cannot
+   derive; every field covered by [Defaults](#defaults) is left out
+   rather than restated, so the scaffold reads as the minimum rather
+   than as a form to edit.
 4. Stub out a commented-out `workstation-to-laptop` and `kiosk` block
    so the user can see the shape of multi-host profiles without
    reading the docs first.
@@ -616,6 +670,9 @@ bootstrap a working `roamfile.yaml`:
    `.roam/` is already tracked — see [`state.md`](state.md)).
 8. Print next steps: "edit `hosts:` to add your workstation, then
    `roam run dev-local` to verify."
+
+Today's scaffold covers 1, 2, 3, 5, 6, and 7. The commented multi-host
+stub (4) and the next-steps message (8) are still outstanding.
 
 `roam init` does **not** modify `Directory.Build.props` or the csproj.
 When the project has no `DeterministicSourcePaths` setting, `roam init`

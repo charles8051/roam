@@ -28,3 +28,8 @@ workspace-wide docs convention in the root `CLAUDE.md`.
   agents as first-class consumers; prioritize machine-consumable diagnostics
   (a fetchable log/dump/trace bundle, `--json` output) over interactive
   debugger attach for them — the *consumer* side. **Accepted.**
+- [roamfile v2](roamfile-v2-schema.md) — remove the ceremony from `roamfile.yaml`:
+  drop `source:` (never a host), merge `run:` into `deploy:` (one lifecycle spec),
+  drop dead `solution:`/`project:` and the single-valued `debug:` fields, and give
+  `process-name` the default the schema already documents so readiness stops
+  silently skipping. **Proposed** — unnumbered draft.

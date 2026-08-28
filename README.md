@@ -30,30 +30,23 @@ roam init --csproj src/MyApp/MyApp.csproj
 ```
 
 That writes `roamfile.yaml` and adds `.roam/` to `.gitignore`. A minimal
-single-host profile:
+single-host profile is four lines — the schema version, the project, the local
+host, the three host roles, the publish block, and the deploy path are all
+derived:
 
 ```yaml
-version: 1
-project: MyApp
-csproj: src/MyApp/MyApp.csproj
-
-hosts:
-  local:
-    ssh: localhost
-    user: myuser
-    workspace: /home/myuser/src/myapp
-    os: linux
-
 profiles:
   dev-local:
-    source: local
-    build: local
-    target: local
-    publish:
-      rid: linux-x64
-      self-contained: true
-      configuration: Release
-    launch-profile: Development
+    deploy:
+      start: ./MyApp
+```
+
+Spelling out the parts you care about is additive. The same profile with a
+restart command, a readiness probe, and debugger attach:
+
+```yaml
+profiles:
+  dev-local:
     deploy:
       path: /home/myuser/apps/myapp
       flatten-publish: true
@@ -66,6 +59,9 @@ profiles:
       editor: vscode
       process-name: MyApp
 ```
+
+Every default is listed in
+[`docs/configuration.md`](docs/configuration.md#defaults).
 
 ```bash
 roam run dev-local        # sync source -> publish -> stop -> sync artifacts -> start -> ready

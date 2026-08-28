@@ -4,13 +4,16 @@ These examples are intentionally copy/paste friendly. They are not tests; the ex
 
 Pick the closest shape, copy `roamfile.yaml` into your repository root, then change:
 
-- project name
 - `solution:` or `csproj:`
 - host aliases, SSH names, users, ports, and identity files
 - workspace paths
 - publish settings (`publish.rid`, `publish.self-contained`, `publish.configuration`) or legacy publish profile names
 - launch profile names
 - deploy paths and stop/start/ready commands
+
+Except `minimal-local`, these examples spell out every field so the topology is
+readable at a glance. Most of them have defaults, so a real roamfile is usually
+much shorter — see [`../docs/configuration.md`](../docs/configuration.md#defaults).
 
 ## Examples
 
