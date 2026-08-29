@@ -22,11 +22,6 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Verify the OIDC exchange and packing without pushing to nuget.org'
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -83,12 +78,13 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
 
-      # On a tag push `inputs.dry_run` is null, so this runs. Only a manual
-      # dispatch can skip it, and that is the default for a dispatch -- the
-      # first exercise of a new trusted-publishing policy should not have to be
-      # an irreversible publish.
+      # Gated on the EVENT, not on an input. The only push trigger is a v* tag, so
+      # this runs for a release tag and nothing else - a dispatch cannot reach it
+      # whatever ref the UI had selected. There is deliberately no `dry_run: false`
+      # escape hatch: it would publish a branch's code under whatever version the
+      # version scheme derived, permanently. One release mechanism, and it is the tag.
       - name: Push to nuget.org
-        if: ${{ !inputs.dry_run }}
+        if: ${{ github.event_name == 'push' }}
         run: >
           dotnet nuget push "artifacts/*.nupkg"
           --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
@@ -96,7 +92,7 @@ jobs:
           --skip-duplicate
 
       - name: Dry run complete
-        if: ${{ inputs.dry_run }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           echo "Dry run: the OIDC exchange with nuget.org succeeded and the"
           echo "package below was built. Nothing was pushed."
